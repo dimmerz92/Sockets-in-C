@@ -73,5 +73,9 @@ int main(int argc, char *argv[])
         error("ERROR writing message");
     }
 
+    // close sockets
+    close(new_sockfd);
+    close(sockfd);
+
     return 0;
 }
