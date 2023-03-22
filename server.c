@@ -7,11 +7,28 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-void error(char *msg)
-{
-    perror(msg);
-    exit(1);
-}
+// pre declared functions
+void error(char *msg);
+void client_handler(int client_socket);
+
+// client data
+typedef struct {
+    char key[11];
+    char value[256];
+} client_data;
+
+// current client sessions
+typedef struct {
+    char client_id[11];
+    int allowance;
+    client_data data[5];
+} client_session;
+
+client_session sessions[5];
+int n_sessions = 0;
+
+// multithread handling
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 int main(int argc, char *argv[])
 {
@@ -27,6 +44,7 @@ int main(int argc, char *argv[])
     socklen_t cli_len = sizeof(cli_addr);
     int sockfd, new_sockfd;
     char buffer[256];
+    pthread_t thread;
 
     // make socket
     if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
@@ -52,30 +70,116 @@ int main(int argc, char *argv[])
         error("ERROR listening to socket");
     }
 
-    // accept incoming connections
-    if ((new_sockfd = accept(sockfd, (struct sockaddr *)&cli_addr, &cli_len)) < 0)
+    // keep accepting ad infinitum
+    while (1)
     {
-        error("ERROR accepting socket");
+        // accept incoming connections
+        memset(&cli_addr, 0, sizeof(cli_addr));
+        if ((new_sockfd = accept(sockfd, (struct sockaddr *)&cli_addr, &cli_len)) < 0)
+        {
+            continue;
+        }
+
+        // start a new thread
+        if(pthread_create(&thread, NULL, client_handler, new_sockfd) != 0)
+        {
+            close(new_sockfd);
+        }
     }
-
-    // read message
-    memset(buffer, 0, 256);
-    if (read(new_sockfd, buffer, 256) < 0)
-    {
-        error("ERROR reading message");
-    }
-
-    printf("%s", buffer);
-
-    // write message
-    if (write(new_sockfd, "I got your message", 18) < 0)
-    {
-        error("ERROR writing message");
-    }
-
-    // close sockets
     close(new_sockfd);
     close(sockfd);
 
     return 0;
+}
+
+void error(char *msg)
+{
+    perror(msg);
+    exit(1);
+}
+
+int get_n_args(char *args)
+{
+    // error check
+    if (strlen(args) > 255 || args[0] == '\n')
+    {
+        return -1;
+    }
+
+    // init counter
+    int word_count = 0;
+
+    // count args
+    for (int i = 0; i < 255; i++)
+    {
+        if (args[i] == ' ')
+        {
+            word_count++;
+        }
+        else if (args[i] == '\n')
+        {
+            word_count++;
+            break;
+        }
+    }
+
+    return word_count;
+}
+
+int *get_arg_lengths(char *args)
+{
+    // error check
+    int n_args = get_n_args(args);
+    if (n_args < 0 || args == 0)
+    {
+        return -1;
+    }
+
+    // init vars
+    int arg_lengths[n_args];
+    int count = 0;
+
+    // find arg lengths
+    memset(arg_lengths, 0, sizeof(arg_lengths));
+    for (int i = 0; i < 255; i++)
+    {
+        if (args[i] == '\0')
+        {
+            break;
+        }
+        if (args[i] == ' ')
+        {
+            count++;
+            continue;
+        }
+            arg_lengths[count]++;
+    }
+
+    return ;
+}
+
+// adds client data to data structure
+int add_data(char *client_id, char *key, char *value)
+{
+    for (int i = 0; i < n_sessions; i++)
+    {
+        // if client exists and has allowance
+        if (strcmp(client_id, sessions[i].client_id) == 0 && sessions[i].allowance < 5)
+        {
+            for (int j = 0; j < sessions[i].allowance; j++)
+            {
+                // if the key is in use, error
+                if (strcmp(sessions[i].data[j].key, key) == 0)
+                {
+                    return -1;
+                }
+            }
+            // add key value pair
+            strcpy(sessions[i].data[sessions[i].allowance].key, key);
+            strcpy(sessions[i].data[sessions[i].allowance].value, value);
+            sessions[i].allowance++;
+            return 0;
+        }
+    }
+    return -1;
 }
