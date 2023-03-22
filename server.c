@@ -155,7 +155,7 @@ int *get_arg_lengths(char *args)
             arg_lengths[count]++;
     }
 
-    return ;
+    return arg_lengths;
 }
 
 // adds client data to data structure
