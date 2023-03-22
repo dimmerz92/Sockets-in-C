@@ -183,3 +183,36 @@ int add_data(char *client_id, char *key, char *value)
     }
     return -1;
 }
+
+// removes client data from data structure
+int remove_data(char *client_id, char *key)
+{
+    for (int i = 0; i < n_sessions; i++)
+    {
+        // if client exists and has data stored
+        if (strcmp(client_id, sessions[i].client_id) == 0 && sessions[i].allowance > 0)
+        {
+            int key_exists = 0;
+            for (int j = 0; j < sessions[i].allowance; j++)
+            {
+                // if key exists, shift elements
+                if (key_exists)
+                {
+                    sessions[i].data[j - 1] = sessions[i].data[j];
+                    if (j == sessions[i].allowance - 1)
+                    {
+                        memset(&sessions[i].data[j], 0, sizeof(client_data));
+                        sessions[i].allowance--;
+                        return 0;
+                    }
+                }
+                // check key exists
+                if (strcmp(key, sessions[i].data[j].key) == 0)
+                {
+                    key_exists = 1;
+                }
+            }
+        }
+    }
+    return -1;
+}
