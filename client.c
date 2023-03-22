@@ -53,23 +53,32 @@ int main(int argc, char *argv[])
         error("ERROR connecting");
     }
 
-    // send a message
-    memset(buffer, 0, 256);
-    printf("Enter a message: ");
-    fgets(buffer, 255, stdin);
-    if (write(sockfd, buffer, strlen(buffer)) < 0)
+    while (1)
     {
-        error("ERROR writing");
-    }
+        printf("Session started\n");
 
-    // receive a message
-    memset(buffer, 0, 255);
-    if (read(sockfd, buffer, 255) < 0)
-    {
-        error("ERROR reading");
-    }
+        // send a message
+        memset(buffer, 0, 256);
+        fgets(buffer, 255, stdin);
+        if (write(sockfd, buffer, strlen(buffer)) < 0)
+        {
+            error("ERROR writing");
+        }
 
-    printf("%s\n", buffer);
+        // receive a message
+        memset(buffer, 0, 255);
+        if (read(sockfd, buffer, 255) < 0)
+        {
+            error("ERROR reading");
+        }
+
+        printf("%s\n", buffer);
+
+        if (strcmp(buffer, "DISCONNECT: OK"))
+        {
+            break;
+        }
+    }
 
     // close socket
     close(sockfd);
