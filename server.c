@@ -386,7 +386,7 @@ void *client_handler(void *cli_socket)
             close(client_socket);
             return NULL;
         }
-        
+
         n = assign_arg(arg_one, buffer, 0, l_args[0], sizeof(arg_one));
         m = assign_arg(arg_two, buffer, l_args[0], l_args[1], sizeof(arg_two));
         if (n_args > 2)
