@@ -80,11 +80,15 @@ int main(int argc, char *argv[])
             continue;
         }
 
+        int *cli_sock = malloc(sizeof(int));
+        *cli_sock = new_sockfd;
+
         // start a new thread
-        if(pthread_create(&thread, NULL, client_handler, (void *)&new_sockfd) != 0)
+        if (pthread_create(&thread, NULL, client_handler, cli_sock) != 0)
         {
             close(new_sockfd);
         }
+        pthread_detach(thread);
     }
     close(new_sockfd);
     close(sockfd);
@@ -185,23 +189,24 @@ int add_data(char *client_id, char *key, char *value)
     return -1;
 }
 
-char *get_data(char *client_id, char *key)
+int get_data(char *client_id, char *key, char *dest)
 {
     for (int i = 0; i < n_sessions; i++)
     {
         // if client exists and has data stored
-        if (strcmp(client_id, sessions[i].client_id) == 0 && sessions[i].allowance > 0)
+        if (strcmp(client_id, sessions[i].client_id) == 0)
         {
             for (int j = 0; j < sessions[i].allowance; j++)
             {
                 if (strcmp(key, sessions[i].data[j].key) == 0)
                 {
-                    return sessions[i].data[j].value;
+                    strcpy(dest, sessions[i].data[j].value);
+                    return 0;
                 }
             }
         }
     }
-    return NULL;
+    return -1;
 }
 
 // removes client data from data structure
@@ -209,27 +214,24 @@ int remove_data(char *client_id, char *key)
 {
     for (int i = 0; i < n_sessions; i++)
     {
-        // if client exists and has data stored
-        if (strcmp(client_id, sessions[i].client_id) == 0 && sessions[i].allowance > 0)
+        // if client exists
+        if (strcmp(client_id, sessions[i].client_id) == 0)
         {
-            int key_exists = 0;
             for (int j = 0; j < sessions[i].allowance; j++)
             {
                 // if key exists, shift elements
-                if (key_exists)
-                {
-                    sessions[i].data[j - 1] = sessions[i].data[j];
-                    if (j == sessions[i].allowance - 1)
-                    {
-                        memset(&sessions[i].data[j], 0, sizeof(client_data));
-                        sessions[i].allowance--;
-                        return 0;
-                    }
-                }
-                // check key exists
                 if (strcmp(key, sessions[i].data[j].key) == 0)
                 {
-                    key_exists = 1;
+                    for (int k = j; k < sessions[i].allowance; k++)
+                    {
+                        if (sessions[i].allowance - k == 1 || sessions[i].allowance == 1)
+                        {
+                            memset(&sessions[i].data[k], 0, sizeof(client_data));
+                            sessions[i].allowance--;
+                            return 0;
+                        }
+                        sessions[i].data[k] = sessions[i].data[k + 1];
+                    }
                 }
             }
         }
@@ -239,22 +241,22 @@ int remove_data(char *client_id, char *key)
 
 int assign_arg(char *dest, char *src, int index, int size, int limit)
 {
-    if (size >= limit)
+    if (size >= limit || src[0] == '\0')
     {
         return -1;
     }
 
     if (index == 0)
     {
-        memset(src, 0, limit);
-        strncpy(dest, src, size);
+        //memset(dest, 0, limit);
+        strncpy(dest, src, size + 1);
     }
     else
     {
-        memset(src, 0, limit);
-        strncpy(dest, src + index + 1, size);
+        //memset(dest, 0, limit);
+        strncpy(dest, src + index + 1, size + 1);
     }
-    dest[size - 1] = '\0';
+    dest[size] = '\0';
 
     return 0;
 }
@@ -263,10 +265,12 @@ int assign_arg(char *dest, char *src, int index, int size, int limit)
 void *client_handler(void *cli_socket)
 {
     // cast client socket to int
-    int client_socket = (int)client_socket;
+    int client_socket = *(int *)cli_socket;
+    free(cli_socket);
+
     // init vars
     char buffer[256];
-    char arg_one[8];
+    char arg_one[12];
     char arg_two[11];
     char arg_three[237];
     int n_args;
@@ -275,7 +279,7 @@ void *client_handler(void *cli_socket)
 
     // initiate a connection
     memset(buffer, 0, 256);
-    if (recv(client_socket, buffer, 255, 0) < 0)
+    if (read(client_socket, buffer, 255) < 0)
     {
         close(client_socket);
         return NULL;
@@ -309,7 +313,7 @@ void *client_handler(void *cli_socket)
 
     n = assign_arg(arg_one, buffer, 0, l_args[0], sizeof(arg_one));
     m = assign_arg(arg_two, buffer, l_args[0], l_args[1], sizeof(arg_two));
-    
+
     // if the first command is not CONNECT, close connection
     if (n < 0 || m < 0 || strcmp(arg_one, "CONNECT") != 0)
     {
@@ -328,15 +332,17 @@ void *client_handler(void *cli_socket)
         {
             send(client_socket, "CONNECT: ERROR", 14, 0);
             close(client_socket);
+            pthread_mutex_unlock(&mutex);
             free(l_args);
             return NULL;
         }
     }
 
     // acknowledge successful connect
-    if (send(client_socket, "CONNECT: OK", 11, 0))
+    if (send(client_socket, "CONNECT: OK", 11, 0) < 0)
     {
         close(client_socket);
+        pthread_mutex_unlock(&mutex);
         free(l_args);
         return NULL;
     }
@@ -365,7 +371,7 @@ void *client_handler(void *cli_socket)
         n_args = get_n_args(buffer);
 
         // if insufficient args, close connection
-        if (n_args < 2)
+        if (n_args < 2 && strcmp(buffer, "DISCONNECT") != 0)
         {
             close(client_socket);
             break;
@@ -388,10 +394,10 @@ void *client_handler(void *cli_socket)
         }
 
         n = assign_arg(arg_one, buffer, 0, l_args[0], sizeof(arg_one));
-        m = assign_arg(arg_two, buffer, l_args[0], l_args[1], sizeof(arg_two));
-        if (n_args > 2)
+        if (n_args >= 2)
         {
-            o = assign_arg(arg_three, buffer, l_args[1], l_args[2], sizeof(arg_three));
+            m = assign_arg(arg_two, buffer, l_args[0], l_args[1], sizeof(arg_two));
+            o = assign_arg(arg_three, buffer, l_args[0] + l_args[1] + 1, l_args[2], sizeof(arg_three));
         }
 
         // handle commands
@@ -399,7 +405,7 @@ void *client_handler(void *cli_socket)
         if (strcmp(arg_one, "PUT") == 0)
         {
             // add the data
-            if (add_data(c_session.client_id, arg_two, arg_three) < 0)
+            if (n_args != 3 || add_data(c_session.client_id, arg_two, arg_three) < 0)
             {
                 if(send(client_socket, "PUT: ERROR", 10, 0) < 0)
                 {
@@ -407,8 +413,7 @@ void *client_handler(void *cli_socket)
                     break;
                 }
             }
-
-            if (send(client_socket, "PUT: OK", 7, 0) < 0)
+            else if (send(client_socket, "PUT: OK", 7, 0) < 0)
             {
                 close(client_socket);
                 break;
@@ -418,8 +423,8 @@ void *client_handler(void *cli_socket)
         {
             // get the data
             char value[237];
-            strcpy(value, get_data(c_session.client_id, arg_two));
-            if (value[0] == '\0')
+            memset(value, 0, sizeof(value));
+            if (get_data(c_session.client_id, arg_two, value) < 0)
             {
                 if(send(client_socket, "GET: ERROR", 10, 0) < 0)
                 {
@@ -427,7 +432,7 @@ void *client_handler(void *cli_socket)
                     break;
                 }
             }
-
+            
             else if (send(client_socket, value, sizeof(value), 0) < 0)
             {
                 close(client_socket);
@@ -437,16 +442,15 @@ void *client_handler(void *cli_socket)
         else if (strcmp(arg_one, "DELETE") == 0)
         {
             // delete data
-            if (remove_data(c_session.client_id, arg_two) < 0)
+            if (remove_data(c_session.client_id, arg_two) == 0)
             {
-                if (send(client_socket, "DELETE: ERROR", 13, 0) < 0)
+                if (send(client_socket, "DELETE: OK", 10, 0) < 0)
                 {
                     close(client_socket);
                     break;
                 }
             }
-
-            if (send(client_socket, "DELETE: OK", 10, 0) < 0)
+            else if (send(client_socket, "DELETE: ERROR", 13, 0) < 0)
             {
                 close(client_socket);
                 break;
@@ -454,14 +458,10 @@ void *client_handler(void *cli_socket)
         }
         else if (strcmp(arg_one, "DISCONNECT") == 0)
         {
-            // disconnect session
-            send(client_socket, "DISCONNECT: OK", 14, 0);
-            close(client_socket);
-
             // remove session and data
             for (int i = 0; i < n_sessions; i++)
             {
-                if (strcmp(c_session.client_id, sessions[i].client_id) && i < n_sessions - 1)
+                if (strcmp(c_session.client_id, sessions[i].client_id) == 0)
                 {
                     for (int j = i; j < n_sessions - 1; j++)
                     {
@@ -472,6 +472,9 @@ void *client_handler(void *cli_socket)
                     break;
                 }
             }
+            // disconnect session
+            send(client_socket, "DISCONNECT: OK", 14, 0);
+            close(client_socket);
             break;
         }
         else
@@ -483,6 +486,7 @@ void *client_handler(void *cli_socket)
         pthread_mutex_unlock(&mutex);
     }
 
+    pthread_mutex_unlock(&mutex);
     free(l_args);
     return NULL;
 }
