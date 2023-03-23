@@ -10,12 +10,12 @@
 /*-------------------------
 | CONSTS
 |-------------------------*/
-const int MAX_SESSIONS = 5;
-const int MAX_DATA_STORAGE = 5;
-const int MAX_BUFFER = 256;
-const int MAX_ARG_ONE = 12;
-const int MAX_ARG_TWO = 11;
-const int MAX_ARG_THREE = 233;
+#define MAX_SESSIONS 5
+#define MAX_DATA_STORAGE 5
+#define MAX_BUFFER 256
+#define MAX_ARG_ONE 12
+#define MAX_ARG_TWO 11
+#define MAX_ARG_THREE 233
 
 /*-------------------------
 | PRE-DECLARATIONS
