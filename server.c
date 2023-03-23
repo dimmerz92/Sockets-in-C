@@ -7,29 +7,54 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-// pre declared functions
+/*-------------------------
+| CONSTS
+|-------------------------*/
+const int MAX_SESSIONS = 5;
+const int MAX_DATA_STORAGE = 5;
+const int MAX_BUFFER = 256;
+const int MAX_ARG_ONE = 12;
+const int MAX_ARG_TWO = 11;
+const int MAX_ARG_THREE = 233;
+
+/*-------------------------
+| PRE-DECLARATIONS
+| - main() dependencies
+|-------------------------*/
 void error(char *msg);
 void *client_handler(void *cli_socket);
 
+/*-------------------------
+| STRUCTS
+| - hold information about
+|   sessions & client data
+|-------------------------*/
 // client data
 typedef struct {
-    char key[11];
-    char value[256];
+    char key[MAX_ARG_TWO];
+    char value[MAX_ARG_THREE];
 } client_data;
 
 // current client sessions
 typedef struct {
-    char client_id[11];
+    char client_id[MAX_ARG_TWO];
     int allowance;
-    client_data data[5];
+    client_data data[MAX_DATA_STORAGE];
 } client_session;
 
-client_session sessions[5];
-int n_sessions = 0;
+client_session sessions[MAX_SESSIONS]; // array to hold session structs
+int n_sessions = 0; // keeps track of number of sessions
 
-// multithread handling
+/*-------------------------
+| MULTI-THREADING
+| - concurrency uses mutex
+|   locks
+|-------------------------*/
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
+/*-------------------------
+| MAIN()
+|-------------------------*/
 int main(int argc, char *argv[])
 {
     // check arg length
@@ -43,7 +68,7 @@ int main(int argc, char *argv[])
     socklen_t serv_len = sizeof(serv_addr);
     socklen_t cli_len = sizeof(cli_addr);
     int sockfd, new_sockfd;
-    char buffer[256];
+    char buffer[MAX_BUFFER];
     pthread_t thread;
 
     // make socket
@@ -65,7 +90,7 @@ int main(int argc, char *argv[])
     }
 
     // listen to socket
-    if (listen(sockfd, 5) < 0)
+    if (listen(sockfd, MAX_SESSIONS) < 0)
     {
         error("ERROR listening to socket");
     }
@@ -96,16 +121,22 @@ int main(int argc, char *argv[])
     return 0;
 }
 
+/*-------------------------
+| FUNCTIONS
+|-------------------------*/
+
+// quick handling for errors
 void error(char *msg)
 {
     perror(msg);
     exit(1);
 }
 
+// gets the number of arguments supplied by client
 int get_n_args(char *args)
 {
     // error check
-    if (strlen(args) > 255 || args == NULL)
+    if (strlen(args) > MAX_BUFFER - 1 || args == NULL)
     {
         return -1;
     }
@@ -114,7 +145,7 @@ int get_n_args(char *args)
     int word_count = 0;
 
     // count args
-    for (int i = 0; i < 255; i++)
+    for (int i = 0; i < MAX_BUFFER - 1; i++)
     {
         if (args[i] == ' ')
         {
@@ -130,6 +161,7 @@ int get_n_args(char *args)
     return word_count;
 }
 
+// gets the length of each argument supplied by client
 int *get_arg_lengths(char *args)
 {
     // error check
@@ -145,7 +177,7 @@ int *get_arg_lengths(char *args)
 
     // find arg lengths
     memset(arg_lengths, 0, n_args * sizeof(int));
-    for (int i = 0; i < 255; i++)
+    for (int i = 0; i < MAX_BUFFER; i++)
     {
         if (args[i] == '\0')
         {
@@ -168,7 +200,7 @@ int add_data(char *client_id, char *key, char *value)
     for (int i = 0; i < n_sessions; i++)
     {
         // if client exists and has allowance
-        if (strcmp(client_id, sessions[i].client_id) == 0 && sessions[i].allowance < 5)
+        if (strcmp(client_id, sessions[i].client_id) == 0 && sessions[i].allowance < MAX_DATA_STORAGE)
         {
             for (int j = 0; j < sessions[i].allowance; j++)
             {
@@ -189,6 +221,7 @@ int add_data(char *client_id, char *key, char *value)
     return -1;
 }
 
+// retrieves client data
 int get_data(char *client_id, char *key, char *dest)
 {
     for (int i = 0; i < n_sessions; i++)
@@ -283,6 +316,7 @@ void terminate_session(char *client_id, int client_socket, int locked, int *mem)
     pthread_mutex_unlock(&mutex);
 }
 
+// assigns client supplied arguments to a variable
 int assign_arg(char *dest, char *src, int index, int size, int limit)
 {
     if (size >= limit || src[0] == '\0')
@@ -308,28 +342,32 @@ int assign_arg(char *dest, char *src, int index, int size, int limit)
 // handles client sessions
 void *client_handler(void *cli_socket)
 {
-    // cast client socket to int
+    // cast client socket back to int
     int client_socket = *(int *)cli_socket;
     free(cli_socket);
 
     // init vars
-    char buffer[256];
-    char arg_one[12];
-    char arg_two[11];
-    char arg_three[237];
+    char buffer[MAX_BUFFER];
+    char arg_one[MAX_ARG_ONE];
+    char arg_two[MAX_ARG_TWO];
+    char arg_three[MAX_ARG_THREE];
     int n_args;
     int *l_args;
     int n, m, o;
 
     // initiate a connection
-    memset(buffer, 0, 256);
-    if (read(client_socket, buffer, 255) < 0)
+    memset(buffer, 0, MAX_BUFFER);
+    if (read(client_socket, buffer, MAX_BUFFER) < 0)
     {
         close(client_socket);
         return NULL;
     }
 
+    // handle newlines and carriage returns
     buffer[strcspn(buffer, "\n")] = '\0';
+    buffer[strcspn(buffer, "\r")] = '\0';
+
+    // get the number of arguments
     n_args = get_n_args(buffer);
 
     // if insufficient args, close connection
@@ -339,6 +377,7 @@ void *client_handler(void *cli_socket)
         return NULL;
     }
 
+    // allocate memory for argument lengths array
     l_args = malloc(n_args * sizeof(int));
     if (l_args == NULL)
     {
@@ -348,21 +387,19 @@ void *client_handler(void *cli_socket)
 
     // parse buffer for arguments
     memcpy(l_args, get_arg_lengths(buffer), n_args * sizeof(int));
-
     if (l_args == NULL)
     {
         close(client_socket);
         return NULL;
     }
 
-    n = assign_arg(arg_one, buffer, 0, l_args[0], sizeof(arg_one));
-    m = assign_arg(arg_two, buffer, l_args[0], l_args[1], sizeof(arg_two));
+    n = assign_arg(arg_one, buffer, 0, l_args[0], MAX_ARG_ONE);
+    m = assign_arg(arg_two, buffer, l_args[0], l_args[1], MAX_ARG_TWO);
 
     // if the first command is not CONNECT, close connection
     if (n < 0 || m < 0 || strcmp(arg_one, "CONNECT") != 0)
     {
-        close(client_socket);
-        free(l_args);
+        terminate_session(NULL, client_socket, 0, l_args);
         return NULL;
     }
 
@@ -374,10 +411,18 @@ void *client_handler(void *cli_socket)
     {
         if (strcmp(sessions[i].client_id, arg_two) == 0)
         {
-            send(client_socket, "CONNECT: ERROR", 14, 0);
+            send(client_socket, "CONNECT: ERROR - client_id in use", 33, 0);
             terminate_session(NULL, client_socket, 1, l_args);
             return NULL;
         }
+    }
+
+    // rejects CONNECT if too many sessions
+    if (n_sessions == MAX_SESSIONS)
+    {
+        send(client_socket, "CONNECT: ERROR - too many sessions", 34, 0);
+        terminate_session(NULL, client_socket, 1, l_args);
+        return NULL;
     }
 
     // add client session
@@ -400,14 +445,19 @@ void *client_handler(void *cli_socket)
     // continue handling messages until client disconnects
     while (1)
     {
-        memset(buffer, 0, 256);
-        if (recv(client_socket, buffer, 255, 0) < 0)
+        // receive messages
+        memset(buffer, 0, MAX_BUFFER);
+        if (recv(client_socket, buffer, MAX_BUFFER, 0) < 0)
         {
             terminate_session(c_session.client_id, client_socket, 0, NULL);
             break;
         }
 
+        // handle newlines and carriage returns
         buffer[strcspn(buffer, "\n")] = '\0';
+        buffer[strcspn(buffer, "\r")] = '\0';
+
+        // get the number of arguments
         n_args = get_n_args(buffer);
 
         // if insufficient args, close connection
@@ -417,6 +467,7 @@ void *client_handler(void *cli_socket)
             break;
         }
 
+        // reallocate memory for argument lengths array
         l_args = realloc(l_args, n_args * sizeof(int));
         if (l_args == NULL)
         {
@@ -426,21 +477,20 @@ void *client_handler(void *cli_socket)
 
         // parse buffer for arguments
         memcpy(l_args, get_arg_lengths(buffer), n_args * sizeof(int));
-
         if (l_args == NULL)
         {
             terminate_session(c_session.client_id, client_socket, 0, NULL);
             break;
         }
 
-        n = assign_arg(arg_one, buffer, 0, l_args[0], sizeof(arg_one));
+        n = assign_arg(arg_one, buffer, 0, l_args[0], MAX_ARG_ONE);
         if (n_args >= 2)
         {
-            m = assign_arg(arg_two, buffer, l_args[0], l_args[1], sizeof(arg_two));
-            o = assign_arg(arg_three, buffer, l_args[0] + l_args[1] + 1, l_args[2], sizeof(arg_three));
+            m = assign_arg(arg_two, buffer, l_args[0], l_args[1], MAX_ARG_TWO);
+            o = assign_arg(arg_three, buffer, l_args[0] + l_args[1] + 1, l_args[2], MAX_ARG_THREE);
         }
 
-        // handle commands
+        // handle client commands
         pthread_mutex_lock(&mutex);
         if (strcmp(arg_one, "PUT") == 0)
         {
@@ -462,8 +512,8 @@ void *client_handler(void *cli_socket)
         else if (strcmp(arg_one, "GET") == 0)
         {
             // get the data
-            char value[237];
-            memset(value, 0, sizeof(value));
+            char value[MAX_ARG_THREE];
+            memset(value, 0, MAX_ARG_THREE);
             if (get_data(c_session.client_id, arg_two, value) < 0)
             {
                 if(send(client_socket, "GET: ERROR", 10, 0) < 0)
@@ -506,7 +556,7 @@ void *client_handler(void *cli_socket)
         }
         else
         {
-            // disconnect
+            // terminate session if unrecognised argument
             terminate_session(c_session.client_id, client_socket, 1, NULL);
             break;
         }
