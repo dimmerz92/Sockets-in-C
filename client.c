@@ -10,7 +10,7 @@
 /*-------------------------
 | CONSTS
 |-------------------------*/
-const int MAX_BUFFER = 256;
+#define MAX_BUFFER 256
 
 /*-------------------------
 | PRE-DECLARATIONS
