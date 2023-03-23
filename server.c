@@ -239,6 +239,50 @@ int remove_data(char *client_id, char *key)
     return -1;
 }
 
+// removes client session
+void remove_session(char *client_id)
+{
+    for (int i = 0; i < n_sessions; i++)
+    {
+        if (strcmp(client_id, sessions[i].client_id) == 0)
+        {
+            for (int j = i; j < n_sessions - 1; j++)
+            {
+                sessions[j] = sessions[j + 1];
+            }
+            memset(&sessions[n_sessions - 1], 0, sizeof(client_session));
+            n_sessions--;
+            return;
+        }
+    }
+}
+
+// terminates session on errors
+void terminate_session(char *client_id, int client_socket, int locked, int *mem)
+{
+    // free memory if not NULL
+    if (mem != NULL)
+    {
+        free(mem);
+    }
+
+    // remove client session if id provided
+    if (client_id != NULL && locked)
+    {
+        remove_session(client_id);
+    }
+    else if (client_id != NULL)
+    {
+        pthread_mutex_lock(&mutex);
+        remove_session(client_id);
+        pthread_mutex_unlock(&mutex);
+    }
+
+    // close the socket
+    close(client_socket);
+    pthread_mutex_unlock(&mutex);
+}
+
 int assign_arg(char *dest, char *src, int index, int size, int limit)
 {
     if (size >= limit || src[0] == '\0')
@@ -331,20 +375,9 @@ void *client_handler(void *cli_socket)
         if (strcmp(sessions[i].client_id, arg_two) == 0)
         {
             send(client_socket, "CONNECT: ERROR", 14, 0);
-            close(client_socket);
-            pthread_mutex_unlock(&mutex);
-            free(l_args);
+            terminate_session(NULL, client_socket, 1, l_args);
             return NULL;
         }
-    }
-
-    // acknowledge successful connect
-    if (send(client_socket, "CONNECT: OK", 11, 0) < 0)
-    {
-        close(client_socket);
-        pthread_mutex_unlock(&mutex);
-        free(l_args);
-        return NULL;
     }
 
     // add client session
@@ -353,6 +386,13 @@ void *client_handler(void *cli_socket)
     c_session.allowance = 0;
     sessions[n_sessions] = c_session;
     n_sessions++;
+
+    // acknowledge successful connect
+    if (send(client_socket, "CONNECT: OK", 11, 0) < 0)
+    {
+        terminate_session(c_session.client_id, client_socket, 1, l_args);
+        return NULL;
+    }
 
     // unlock the thread
     pthread_mutex_unlock(&mutex);
@@ -363,7 +403,7 @@ void *client_handler(void *cli_socket)
         memset(buffer, 0, 256);
         if (recv(client_socket, buffer, 255, 0) < 0)
         {
-            close(client_socket);
+            terminate_session(c_session.client_id, client_socket, 0, NULL);
             break;
         }
 
@@ -373,14 +413,14 @@ void *client_handler(void *cli_socket)
         // if insufficient args, close connection
         if (n_args < 2 && strcmp(buffer, "DISCONNECT") != 0)
         {
-            close(client_socket);
+            terminate_session(c_session.client_id, client_socket, 0, NULL);
             break;
         }
 
         l_args = realloc(l_args, n_args * sizeof(int));
         if (l_args == NULL)
         {
-            close(client_socket);
+            terminate_session(c_session.client_id, client_socket, 0, NULL);
             break;
         }
 
@@ -389,8 +429,8 @@ void *client_handler(void *cli_socket)
 
         if (l_args == NULL)
         {
-            close(client_socket);
-            return NULL;
+            terminate_session(c_session.client_id, client_socket, 0, NULL);
+            break;
         }
 
         n = assign_arg(arg_one, buffer, 0, l_args[0], sizeof(arg_one));
@@ -409,13 +449,13 @@ void *client_handler(void *cli_socket)
             {
                 if(send(client_socket, "PUT: ERROR", 10, 0) < 0)
                 {
-                    close(client_socket);
+                    terminate_session(c_session.client_id, client_socket, 1, NULL);
                     break;
                 }
             }
             else if (send(client_socket, "PUT: OK", 7, 0) < 0)
             {
-                close(client_socket);
+                terminate_session(c_session.client_id, client_socket, 1, NULL);
                 break;
             }
         }
@@ -428,14 +468,14 @@ void *client_handler(void *cli_socket)
             {
                 if(send(client_socket, "GET: ERROR", 10, 0) < 0)
                 {
-                    close(client_socket);
+                    terminate_session(c_session.client_id, client_socket, 1, NULL);
                     break;
                 }
             }
             
             else if (send(client_socket, value, sizeof(value), 0) < 0)
             {
-                close(client_socket);
+                terminate_session(c_session.client_id, client_socket, 1, NULL);
                 break;
             }
         }
@@ -446,33 +486,20 @@ void *client_handler(void *cli_socket)
             {
                 if (send(client_socket, "DELETE: OK", 10, 0) < 0)
                 {
-                    close(client_socket);
+                    terminate_session(c_session.client_id, client_socket, 1, NULL);
                     break;
                 }
             }
             else if (send(client_socket, "DELETE: ERROR", 13, 0) < 0)
             {
-                close(client_socket);
+                terminate_session(c_session.client_id, client_socket, 1, NULL);
                 break;
             }
         }
         else if (strcmp(arg_one, "DISCONNECT") == 0)
         {
-            // remove session and data
-            for (int i = 0; i < n_sessions; i++)
-            {
-                if (strcmp(c_session.client_id, sessions[i].client_id) == 0)
-                {
-                    for (int j = i; j < n_sessions - 1; j++)
-                    {
-                        sessions[j] = sessions[j + 1];
-                    }
-                    memset(&sessions[n_sessions - 1], 0, sizeof(client_session));
-                    n_sessions--;
-                    break;
-                }
-            }
             // disconnect session
+            remove_session(c_session.client_id);
             send(client_socket, "DISCONNECT: OK", 14, 0);
             close(client_socket);
             break;
@@ -480,7 +507,7 @@ void *client_handler(void *cli_socket)
         else
         {
             // disconnect
-            close(client_socket);
+            terminate_session(c_session.client_id, client_socket, 1, NULL);
             break;
         }
         pthread_mutex_unlock(&mutex);
