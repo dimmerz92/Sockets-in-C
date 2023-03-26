@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -20,6 +21,7 @@
 void *client_handler(void *cli_socket);
 void error(char *msg);
 void strip_nl(char *buffer);
+int ascii_buffer(char *buffer);
 int get_session(char *client_id);
 void remove_session(char *client_id);
 int remove_data(char *client_id, char *key, int shift_items);
@@ -150,6 +152,13 @@ void *client_handler(void *cli_socket)
     // replace \n & \r with \0
     strip_nl(buffer);
 
+    // check message is ASCII only
+    if (ascii_buffer(buffer) < 0)
+    {
+        close(client_socket);
+        return NULL;
+    }
+
     // check argument is CONNECT with space
     if (n_sessions == 5 || strncmp(buffer, "CONNECT ", 8) != 0)
     {
@@ -210,6 +219,12 @@ void *client_handler(void *cli_socket)
         // replace \n & \r with \0
         strip_nl(buffer);
 
+        // check message is ASCII only
+        if (ascii_buffer(buffer) < 0)
+        {
+            break;
+        }
+
         // get the command
         cmd_len = strcspn(buffer, " ") + 1;
         if ((command = malloc((cmd_len + 1) * sizeof(char))) == NULL)
@@ -269,6 +284,12 @@ void *client_handler(void *cli_socket)
                         goto put_error;
                     }
                     strip_nl(buffer);
+
+                    // check message is ASCII only
+                    if (ascii_buffer(buffer) < 0)
+                    {
+                        break;
+                    }
 
                     // check if key exists
                     pthread_mutex_lock(&mutex);
@@ -430,6 +451,19 @@ void strip_nl(char *buffer)
 {
     buffer[strcspn(buffer, "\n")] = '\0';
     buffer[strcspn(buffer, "\r")] = '\0';
+}
+
+// checks buffer contains only ASCII characters
+int ascii_buffer(char *buffer)
+{
+    for (int i = 0; i < strlen(buffer); i++)
+    {
+        if (!isascii(buffer[i]))
+        {
+            return -1;
+        }
+    }
+    return 0;
 }
 
 // gets the index of a client session in the sessions array
