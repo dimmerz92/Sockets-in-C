@@ -1,4 +1,4 @@
-# Client-Server Program Assessment Submission README
+# Assessment 2 - Client-Server Programs Assessment Submission README
 
 ## Author
 **Name:**       Andrew Weymes\
