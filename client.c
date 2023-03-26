@@ -17,6 +17,7 @@
 | - main() dependencies
 |-------------------------*/
 void error(char *msg);
+int ascii_buffer(char *buffer);
 
 /*-------------------------
 | MAIN()
@@ -65,6 +66,13 @@ int main(int argc, char *argv[])
         // send a message
         memset(buffer, 0, MAX_BUFFER);
         fgets(buffer, MAX_BUFFER, stdin);
+        if (ascii_buffer(buffer) < 0)
+        {
+            close(sockfd);
+            error("ERROR input contains non-ASCII characters");
+        }
+        
+        // check ascii chars
         if (write(sockfd, buffer, strlen(buffer)) < 0)
         {
             close(sockfd);
@@ -79,6 +87,13 @@ int main(int argc, char *argv[])
             error("ERROR reading");
         }
 
+        // check ascii chars
+        if (ascii_buffer(buffer) < 0)
+        {
+            close(sockfd);
+            error("ERROR input contains non-ASCII characters");
+        }
+
         if (action == 0)
         {
             // server force disconnected
@@ -89,6 +104,14 @@ int main(int argc, char *argv[])
             // send the value
             memset(buffer, 0, MAX_BUFFER);
             fgets(buffer, MAX_BUFFER, stdin);
+
+            // check ascii chars
+            if (ascii_buffer(buffer) < 0)
+            {
+                close(sockfd);
+                error("ERROR input contains non-ASCII characters");
+            }
+
             if (write(sockfd, buffer, strlen(buffer)) < 0)
             {
                 close(sockfd);
@@ -101,6 +124,13 @@ int main(int argc, char *argv[])
             {
                 close(sockfd);
                 error("ERROR reading");
+            }
+
+            // check ascii chars
+            if (ascii_buffer(buffer) < 0)
+            {
+                close(sockfd);
+                error("ERROR input contains non-ASCII characters");
             }
         }
 
@@ -128,4 +158,17 @@ void error(char *msg)
 {
     fprintf(stderr, "%s\n", msg);
     exit(1);
+}
+
+// checks buffer contains only ASCII characters
+int ascii_buffer(char *buffer)
+{
+    for (int i = 0; i < strlen(buffer); i++)
+    {
+        if (!isascii(buffer[i]))
+        {
+            return -1;
+        }
+    }
+    return 0;
 }
