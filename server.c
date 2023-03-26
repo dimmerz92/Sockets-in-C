@@ -110,7 +110,7 @@ int main(int argc, char *argv[])
             close(new_sockfd);
             continue;
         }
-        cli_sock = &new_sockfd;
+        *cli_sock = new_sockfd;
 
         // start a new thread
         if (pthread_create(&thread, NULL, client_handler, cli_sock) != 0)
