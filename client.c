@@ -60,8 +60,6 @@ int main(int argc, char *argv[])
         error("ERROR connecting");
     }
 
-    printf("Session started\n");
-
     while (1)
     {
         // send a message
@@ -74,16 +72,36 @@ int main(int argc, char *argv[])
         }
 
         // receive a message
-        memset(buffer, 0, MAX_BUFFER);
+        memset(buffer, 0, MAX_BUFFER - 1);
         if ((action = read(sockfd, buffer, MAX_BUFFER)) < 0)
         {
             close(sockfd);
             error("ERROR reading");
         }
-        else if (action == 0)
+
+        if (action == 0)
         {
-            printf("SERVER DISCONNECTED\n");
+            // server force disconnected
             break;
+        }
+        else if (strcmp(buffer, "ACK") == 0)
+        {
+            // send the value
+            memset(buffer, 0, MAX_BUFFER);
+            fgets(buffer, MAX_BUFFER, stdin);
+            if (write(sockfd, buffer, strlen(buffer)) < 0)
+            {
+                close(sockfd);
+                error("ERROR writing");
+            }
+
+            // receive a message
+            memset(buffer, 0, MAX_BUFFER - 1);
+            if ((action = read(sockfd, buffer, MAX_BUFFER)) < 0)
+            {
+                close(sockfd);
+                error("ERROR reading");
+            }
         }
 
         printf("%s\n", buffer);
@@ -91,7 +109,6 @@ int main(int argc, char *argv[])
         // disconnect gracefully
         if (strstr(buffer, "DISCONNECT: OK") || strstr(buffer, "CONNECT: ERROR"))
         {
-            printf("SERVER DISCONNECTED\n");
             break;
         }
     }
@@ -109,6 +126,6 @@ int main(int argc, char *argv[])
 // quick handling for errors
 void error(char *msg)
 {
-    perror(msg);
+    fprintf(stderr, "%s\n", msg);
     exit(1);
 }

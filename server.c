@@ -11,18 +11,18 @@
 | CONSTS
 |-------------------------*/
 #define MAX_SESSIONS 5
-#define MAX_DATA_STORAGE 5
 #define MAX_BUFFER 256
-#define MAX_ARG_ONE 12
-#define MAX_ARG_TWO 11
-#define MAX_ARG_THREE 233
 
 /*-------------------------
 | PRE-DECLARATIONS
 | - main() dependencies
 |-------------------------*/
-void error(char *msg);
 void *client_handler(void *cli_socket);
+void error(char *msg);
+void strip_nl(char *buffer);
+int get_session(char *client_id);
+void remove_session(char *client_id);
+int remove_data(char *client_id, char *key, int shift_items);
 
 /*-------------------------
 | STRUCTS
@@ -31,15 +31,15 @@ void *client_handler(void *cli_socket);
 |-------------------------*/
 // client data
 typedef struct {
-    char key[MAX_ARG_TWO];
-    char value[MAX_ARG_THREE];
+    char *key;
+    char *value;
 } client_data;
 
 // current client sessions
 typedef struct {
-    char client_id[MAX_ARG_TWO];
+    char *client_id;
     int allowance;
-    client_data data[MAX_DATA_STORAGE];
+    client_data *data;
 } client_session;
 
 client_session sessions[MAX_SESSIONS]; // array to hold session structs
@@ -58,27 +58,26 @@ pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 int main(int argc, char *argv[])
 {
     // check arg length
-    if (argc < 2)
+    if (argc != 2)
     {
         error("ERROR insufficient arguments");
     }
 
-    // init vars
+    // initialise socket variables
     struct sockaddr_in serv_addr, cli_addr;
     socklen_t serv_len = sizeof(serv_addr);
     socklen_t cli_len = sizeof(cli_addr);
-    int sockfd, new_sockfd;
-    char buffer[MAX_BUFFER];
+    int sockfd, new_sockfd, *cli_sock;
     pthread_t thread;
 
-    // make socket
+    // create socket
     if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
     {
         error("ERROR creating socket");
     }
 
-    // socket details
-    memset(&serv_addr, 0, sizeof(serv_addr));
+    // add socket details
+    memset(&serv_addr, 0, serv_len);
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_port = htons(atoi(argv[1]));
     serv_addr.sin_addr.s_addr = INADDR_ANY;
@@ -95,29 +94,34 @@ int main(int argc, char *argv[])
         error("ERROR listening to socket");
     }
 
-    // keep accepting ad infinitum
+    // keep accepting new connections
     while (1)
     {
-        // accept incoming connections
-        memset(&cli_addr, 0, sizeof(cli_addr));
+        // accept incoming connection
+        memset(&cli_addr, 0, cli_len);
         if ((new_sockfd = accept(sockfd, (struct sockaddr *)&cli_addr, &cli_len)) < 0)
         {
             continue;
         }
 
-        int *cli_sock = malloc(sizeof(int));
-        *cli_sock = new_sockfd;
+        // prepare client socket to pass in to new thread
+        if ((cli_sock = malloc(sizeof(int))) == NULL)
+        {
+            close(new_sockfd);
+            continue;
+        }
+        cli_sock = &new_sockfd;
 
         // start a new thread
         if (pthread_create(&thread, NULL, client_handler, cli_sock) != 0)
         {
             close(new_sockfd);
+            free(cli_sock);
+            continue;
         }
         pthread_detach(thread);
     }
-    close(new_sockfd);
     close(sockfd);
-
     return 0;
 }
 
@@ -125,445 +129,405 @@ int main(int argc, char *argv[])
 | FUNCTIONS
 |-------------------------*/
 
-// quick handling for errors
-void error(char *msg)
-{
-    perror(msg);
-    exit(1);
-}
-
-// gets the number of arguments supplied by client
-int get_n_args(char *args)
-{
-    // error check
-    if (strlen(args) > MAX_BUFFER - 1 || args == NULL)
-    {
-        return -1;
-    }
-
-    // init counter
-    int word_count = 0;
-
-    // count args
-    for (int i = 0; i < MAX_BUFFER - 1; i++)
-    {
-        if (args[i] == ' ')
-        {
-            word_count++;
-        }
-        else if (args[i] == '\0')
-        {
-            word_count++;
-            break;
-        }
-    }
-
-    return word_count;
-}
-
-// gets the length of each argument supplied by client
-int *get_arg_lengths(char *args)
-{
-    // error check
-    int n_args = get_n_args(args);
-    if (n_args < 0 || args == NULL)
-    {
-        return NULL;
-    }
-
-    // init vars
-    int *arg_lengths = malloc(n_args * sizeof(int));
-    int count = 0;
-
-    // find arg lengths
-    memset(arg_lengths, 0, n_args * sizeof(int));
-    for (int i = 0; i < MAX_BUFFER; i++)
-    {
-        if (args[i] == '\0')
-        {
-            break;
-        }
-        if (args[i] == ' ')
-        {
-            count++;
-            continue;
-        }
-            arg_lengths[count]++;
-    }
-
-    return arg_lengths;
-}
-
-// adds client data to data structure
-int add_data(char *client_id, char *key, char *value)
-{
-    for (int i = 0; i < n_sessions; i++)
-    {
-        // if client exists and has allowance
-        if (strcmp(client_id, sessions[i].client_id) == 0 && sessions[i].allowance < MAX_DATA_STORAGE)
-        {
-            for (int j = 0; j < sessions[i].allowance; j++)
-            {
-                // if the key is in use, overwrite
-                if (strcmp(sessions[i].data[j].key, key) == 0)
-                {
-                    strcpy(sessions[i].data[j].value, value);
-                    return 0;
-                }
-            }
-            // add key value pair
-            strcpy(sessions[i].data[sessions[i].allowance].key, key);
-            strcpy(sessions[i].data[sessions[i].allowance].value, value);
-            sessions[i].allowance++;
-            return 0;
-        }
-    }
-    return -1;
-}
-
-// retrieves client data
-int get_data(char *client_id, char *key, char *dest)
-{
-    for (int i = 0; i < n_sessions; i++)
-    {
-        // if client exists and has data stored
-        if (strcmp(client_id, sessions[i].client_id) == 0)
-        {
-            for (int j = 0; j < sessions[i].allowance; j++)
-            {
-                if (strcmp(key, sessions[i].data[j].key) == 0)
-                {
-                    strcpy(dest, sessions[i].data[j].value);
-                    return 0;
-                }
-            }
-        }
-    }
-    return -1;
-}
-
-// removes client data from data structure
-int remove_data(char *client_id, char *key)
-{
-    for (int i = 0; i < n_sessions; i++)
-    {
-        // if client exists
-        if (strcmp(client_id, sessions[i].client_id) == 0)
-        {
-            for (int j = 0; j < sessions[i].allowance; j++)
-            {
-                // if key exists, shift elements
-                if (strcmp(key, sessions[i].data[j].key) == 0)
-                {
-                    for (int k = j; k < sessions[i].allowance; k++)
-                    {
-                        if (sessions[i].allowance - k == 1 || sessions[i].allowance == 1)
-                        {
-                            memset(&sessions[i].data[k], 0, sizeof(client_data));
-                            sessions[i].allowance--;
-                            return 0;
-                        }
-                        sessions[i].data[k] = sessions[i].data[k + 1];
-                    }
-                }
-            }
-        }
-    }
-    return -1;
-}
-
-// removes client session
-void remove_session(char *client_id)
-{
-    for (int i = 0; i < n_sessions; i++)
-    {
-        if (strcmp(client_id, sessions[i].client_id) == 0)
-        {
-            for (int j = i; j < n_sessions - 1; j++)
-            {
-                sessions[j] = sessions[j + 1];
-            }
-            memset(&sessions[n_sessions - 1], 0, sizeof(client_session));
-            n_sessions--;
-            return;
-        }
-    }
-}
-
-// terminates session on errors
-void terminate_session(char *client_id, int client_socket, int locked, int *mem)
-{
-    // free memory if not NULL
-    if (mem != NULL)
-    {
-        free(mem);
-    }
-
-    // remove client session if id provided
-    if (client_id != NULL && locked)
-    {
-        remove_session(client_id);
-    }
-    else if (client_id != NULL)
-    {
-        pthread_mutex_lock(&mutex);
-        remove_session(client_id);
-        pthread_mutex_unlock(&mutex);
-    }
-
-    // close the socket
-    close(client_socket);
-    pthread_mutex_unlock(&mutex);
-}
-
-// assigns client supplied arguments to a variable
-int assign_arg(char *dest, char *src, int index, int size, int limit)
-{
-    if (size >= limit || src[0] == '\0')
-    {
-        return -1;
-    }
-
-    if (index == 0)
-    {
-        //memset(dest, 0, limit);
-        strncpy(dest, src, size + 1);
-    }
-    else
-    {
-        //memset(dest, 0, limit);
-        strncpy(dest, src + index + 1, size + 1);
-    }
-    dest[size] = '\0';
-
-    return 0;
-}
-
 // handles client sessions
 void *client_handler(void *cli_socket)
 {
-    // cast client socket back to int
+    // initialise variables
     int client_socket = *(int *)cli_socket;
-    free(cli_socket);
-
-    // init vars
+    //free(cli_socket);
     char buffer[MAX_BUFFER];
-    char arg_one[MAX_ARG_ONE];
-    char arg_two[MAX_ARG_TWO];
-    char arg_three[MAX_ARG_THREE];
-    int n_args;
-    int *l_args;
-    int n, m, o;
+    char *command, *argument;
+    int session, cmd_len, arg_len, arg, exists;
 
-    // initiate a connection
+    // read first message, ensure CONNECT before starting new thread
     memset(buffer, 0, MAX_BUFFER);
-    if (read(client_socket, buffer, MAX_BUFFER) < 0)
+    if (recv(client_socket, buffer, MAX_BUFFER - 1, 0) < 0)
     {
         close(client_socket);
         return NULL;
     }
 
-    // handle newlines and carriage returns
-    buffer[strcspn(buffer, "\n")] = '\0';
-    buffer[strcspn(buffer, "\r")] = '\0';
+    // replace \n & \r with \0
+    strip_nl(buffer);
 
-    // get the number of arguments
-    n_args = get_n_args(buffer);
-
-    // if insufficient args, close connection
-    if (n_args != 2)
+    // check argument is CONNECT with space
+    if (n_sessions == 5 || strncmp(buffer, "CONNECT ", 8) != 0)
     {
         close(client_socket);
         return NULL;
     }
 
-    // allocate memory for argument lengths array
-    l_args = malloc(n_args * sizeof(int));
-    if (l_args == NULL)
-    {
-        close(client_socket);
-        return NULL;
-    }
-
-    // parse buffer for arguments
-    memcpy(l_args, get_arg_lengths(buffer), n_args * sizeof(int));
-    if (l_args == NULL)
-    {
-        close(client_socket);
-        return NULL;
-    }
-
-    n = assign_arg(arg_one, buffer, 0, l_args[0], MAX_ARG_ONE);
-    m = assign_arg(arg_two, buffer, l_args[0], l_args[1], MAX_ARG_TWO);
-
-    // if the first command is not CONNECT, close connection
-    if (n < 0 || m < 0 || strcmp(arg_one, "CONNECT") != 0)
-    {
-        terminate_session(NULL, client_socket, 0, l_args);
-        return NULL;
-    }
-
-    // lock thread to check for sessions
+    // check if client exists
     pthread_mutex_lock(&mutex);
-
-    // if client already has a session, close connection
-    for (int i = 0; i < n_sessions; i++)
+    if (get_session(&buffer[strlen("CONNECT ")]) >= 0)
     {
-        if (strcmp(sessions[i].client_id, arg_two) == 0)
-        {
-            send(client_socket, "CONNECT: ERROR - client_id in use", 33, 0);
-            terminate_session(NULL, client_socket, 1, l_args);
-            return NULL;
-        }
-    }
-
-    // rejects CONNECT if too many sessions
-    if (n_sessions == MAX_SESSIONS)
-    {
-        send(client_socket, "CONNECT: ERROR - too many sessions", 34, 0);
-        terminate_session(NULL, client_socket, 1, l_args);
+        pthread_mutex_unlock(&mutex);
+        send(client_socket, "CONNECT: ERROR", strlen("CONNECT: ERROR"), 0);
+        close(client_socket);
         return NULL;
     }
+    pthread_mutex_unlock(&mutex);
 
     // add client session
     client_session c_session;
-    strcpy(c_session.client_id, arg_two);
+    c_session.client_id = malloc((strlen(&buffer[strlen("CONNECT ")]) + 1) * sizeof(char));
+    c_session.data = malloc(1);
+    if (c_session.client_id == NULL || c_session.data == NULL)
+    {
+        send(client_socket, "CONNECT: ERROR", strlen("CONNECT: ERROR"), 0);
+        close(client_socket);
+        free(c_session.client_id);
+        free(c_session.data);
+        return NULL;
+    }
+    strcpy(c_session.client_id, &buffer[strlen("CONNECT ")]);
     c_session.allowance = 0;
+    pthread_mutex_lock(&mutex);
     sessions[n_sessions] = c_session;
     n_sessions++;
+    pthread_mutex_unlock(&mutex);
 
-    // acknowledge successful connect
-    if (send(client_socket, "CONNECT: OK", 11, 0) < 0)
+    // acknowledge connect
+    if(send(client_socket, "CONNECT: OK", strlen("CONNECT: OK"), 0) < 0)
     {
-        terminate_session(c_session.client_id, client_socket, 1, l_args);
+        pthread_mutex_lock(&mutex);
+        remove_session(c_session.client_id);
+        pthread_mutex_unlock(&mutex);
+        close(client_socket);
         return NULL;
     }
 
-    // unlock the thread
-    pthread_mutex_unlock(&mutex);
-
-    // continue handling messages until client disconnects
+    // continue handling messages until DISCONNECT
     while (1)
     {
         // receive messages
         memset(buffer, 0, MAX_BUFFER);
-        if (recv(client_socket, buffer, MAX_BUFFER, 0) < 0)
+        if (recv(client_socket, buffer, MAX_BUFFER - 1, 0) < 0)
         {
-            terminate_session(c_session.client_id, client_socket, 0, NULL);
             break;
         }
 
-        // handle newlines and carriage returns
-        buffer[strcspn(buffer, "\n")] = '\0';
-        buffer[strcspn(buffer, "\r")] = '\0';
+        // replace \n & \r with \0
+        strip_nl(buffer);
 
-        // get the number of arguments
-        n_args = get_n_args(buffer);
-
-        // if insufficient args, close connection
-        if (n_args < 2 && strcmp(buffer, "DISCONNECT") != 0)
+        // get the command
+        cmd_len = strcspn(buffer, " ");
+        if ((command = malloc((cmd_len + 1) * sizeof(char))) == NULL)
         {
-            terminate_session(c_session.client_id, client_socket, 0, NULL);
             break;
         }
+        strncpy(command, buffer, cmd_len);
+        command[cmd_len] = '\0';
 
-        // reallocate memory for argument lengths array
-        l_args = realloc(l_args, n_args * sizeof(int));
-        if (l_args == NULL)
+        // disconnect if commanded, otherwise get argument
+        if (strcmp(command, "DISCONNECT") == 0)
         {
-            terminate_session(c_session.client_id, client_socket, 0, NULL);
-            break;
-        }
-
-        // parse buffer for arguments
-        memcpy(l_args, get_arg_lengths(buffer), n_args * sizeof(int));
-        if (l_args == NULL)
-        {
-            terminate_session(c_session.client_id, client_socket, 0, NULL);
-            break;
-        }
-
-        n = assign_arg(arg_one, buffer, 0, l_args[0], MAX_ARG_ONE);
-        if (n_args >= 2)
-        {
-            m = assign_arg(arg_two, buffer, l_args[0], l_args[1], MAX_ARG_TWO);
-            o = assign_arg(arg_three, buffer, l_args[0] + l_args[1] + 1, l_args[2], MAX_ARG_THREE);
-        }
-
-        // handle client commands
-        pthread_mutex_lock(&mutex);
-        if (strcmp(arg_one, "PUT") == 0)
-        {
-            // add the data
-            if (n_args != 3 || add_data(c_session.client_id, arg_two, arg_three) < 0)
-            {
-                if(send(client_socket, "PUT: ERROR", 10, 0) < 0)
-                {
-                    terminate_session(c_session.client_id, client_socket, 1, NULL);
-                    break;
-                }
-            }
-            else if (send(client_socket, "PUT: OK", 7, 0) < 0)
-            {
-                terminate_session(c_session.client_id, client_socket, 1, NULL);
-                break;
-            }
-        }
-        else if (strcmp(arg_one, "GET") == 0)
-        {
-            // get the data
-            char value[MAX_ARG_THREE];
-            memset(value, 0, MAX_ARG_THREE);
-            if (get_data(c_session.client_id, arg_two, value) < 0)
-            {
-                if(send(client_socket, "GET: ERROR", 10, 0) < 0)
-                {
-                    terminate_session(c_session.client_id, client_socket, 1, NULL);
-                    break;
-                }
-            }
-            
-            else if (send(client_socket, value, sizeof(value), 0) < 0)
-            {
-                terminate_session(c_session.client_id, client_socket, 1, NULL);
-                break;
-            }
-        }
-        else if (strcmp(arg_one, "DELETE") == 0)
-        {
-            // delete data
-            if (remove_data(c_session.client_id, arg_two) == 0)
-            {
-                if (send(client_socket, "DELETE: OK", 10, 0) < 0)
-                {
-                    terminate_session(c_session.client_id, client_socket, 1, NULL);
-                    break;
-                }
-            }
-            else if (send(client_socket, "DELETE: ERROR", 13, 0) < 0)
-            {
-                terminate_session(c_session.client_id, client_socket, 1, NULL);
-                break;
-            }
-        }
-        else if (strcmp(arg_one, "DISCONNECT") == 0)
-        {
-            // disconnect session
-            remove_session(c_session.client_id);
-            send(client_socket, "DISCONNECT: OK", 14, 0);
-            close(client_socket);
+            send(client_socket, "DISCONNECT: OK", strlen("DISCONNECT: OK"), 0);
+            free(command);
             break;
         }
         else
         {
-            // terminate session if unrecognised argument
-            terminate_session(c_session.client_id, client_socket, 1, NULL);
+            arg_len = strlen(&buffer[cmd_len + 1]);
+            if((argument = malloc((arg_len + 1) * sizeof(char))) == NULL)
+            {
+                free(command);
+                break;
+            }
+            strncpy(argument, &buffer[cmd_len + 1], arg_len);
+            argument[arg_len] = '\0';
+        }
+
+        // handle the command
+        strcmp(command, "PUT") == 0 ? (arg = 1) :
+        strcmp(command, "GET") == 0 ? (arg = 2) :
+        strcmp(command, "DELETE") == 0? (arg = 3) :
+        (arg = -1);
+
+        free(command);
+
+        // error handling for switch case
+        int switch_err = 0;
+
+        switch(arg)
+        {
+            case 1:
+                // PUT command: add data
+                // acknowledge PUT command
+                if (send(client_socket, "ACK", 3, 0) < 0)
+                {
+                    switch_err = 1;
+                }
+
+                if (!switch_err)
+                {
+                    // receive value
+                    memset(buffer, 0, MAX_BUFFER);
+                    if (recv(client_socket, buffer, MAX_BUFFER - 1, 0) < 0)
+                    {
+                        switch_err = 1;
+                        goto put_error;
+                    }
+                    strip_nl(buffer);
+
+                    // check if key exists
+                    pthread_mutex_lock(&mutex);
+                    session = get_session(c_session.client_id);
+                    exists = 0;
+                    for (int i = 0; i < sessions[session].allowance; i++)
+                    {
+                        // if key exists
+                        if (strcmp(sessions[session].data[i].key, argument) == 0)
+                        {
+                            // change data
+                            exists = 1;
+                            sessions[session].data[i].key = realloc(sessions[session].data[i].key, (arg_len + 1) * sizeof(char));
+                            sessions[session].data[i].value = realloc(sessions[session].data[i].value, (strlen(buffer) + 1) * sizeof(char));
+                            if (sessions[session].data[i].key == NULL || sessions[session].data[i].value == NULL)
+                            {
+                                switch_err = 1;
+                                goto put_error;
+                            }
+                            strcpy(sessions[session].data[i].key, argument);
+                            strcpy(sessions[session].data[i].value, buffer);
+                            break;
+                        }
+                    }
+                }
+
+                // if key doesn't exist
+                if (!exists)
+                {
+                    // add data
+                    client_data data;
+                    data.key = malloc((arg_len + 1) * sizeof(char));
+                    data.value = malloc((strlen(buffer) + 1) * sizeof(char));
+                    sessions[session].data = realloc(sessions[session].data, (sessions[session].allowance + 1) * sizeof(client_data));
+                    if (data.key == NULL || data.value == NULL || sessions[session].data == NULL)
+                    {
+                        switch_err = 1;
+                        goto put_error;
+                    }
+                    strcpy(data.key, argument);
+                    strcpy(data.value, buffer);
+                    sessions[session].data[sessions[session].allowance] = data;
+                    sessions[session].allowance++;
+                }
+
+                if (!switch_err)
+                {
+                    if (send(client_socket, "PUT: OK", strlen("PUT: OK"), 0) < 0)
+                    {
+                        switch_err = 1;
+                    }
+                }
+
+                put_error:
+                if (switch_err)
+                {
+                    switch_err = 0;
+                    if (send(client_socket, "PUT: ERROR", strlen("PUT: ERROR"), 0) < 0)
+                    {
+                        switch_err = 1;
+                    }
+                }
+                
+                pthread_mutex_unlock(&mutex);
+                break;
+
+            case 2:
+                // GET command
+                pthread_mutex_lock(&mutex);
+                session = get_session(c_session.client_id);
+
+                // for all data items
+                for (int i = 0; i < sessions[session].allowance; i++)
+                {
+                    exists = 0;
+                    // if key in data array
+                    if (strcmp(sessions[session].data[i].key, argument) == 0)
+                    {
+                        exists = 1;
+                        if (send(client_socket, sessions[session].data[i].value, strlen(sessions[session].data[i].value), 0) < 0)
+                        {
+                            switch_err = 1;
+                        }
+                        break;
+                    }
+                }
+
+                if (switch_err || !exists)
+                {
+                    switch_err = 0;
+                    if (send(client_socket, "GET: ERROR", strlen("GET: ERROR"), 0) < 0)
+                    {
+                        switch_err = 1;
+                    }
+                }
+
+                pthread_mutex_unlock(&mutex);
+                break;
+
+            case 3:
+                // DELETE command
+                pthread_mutex_lock(&mutex);
+                session = get_session(c_session.client_id);
+                if (remove_data(c_session.client_id, argument, 1) < 0)
+                {
+                    switch_err = 1;
+                }
+
+                if (switch_err)
+                {
+                    switch_err = 0;
+                    if (send(client_socket, "DELETE: ERROR", strlen("DELETE: ERROR"), 0) < 0)
+                    {
+                        switch_err = 1;
+                    }
+                }
+                else
+                {
+                    if (send(client_socket, "DELETE: OK", strlen("DELETE: OK"), 0) < 0)
+                    {
+                        switch_err = 1;
+                    }
+                }
+
+                pthread_mutex_unlock(&mutex);
+                break;
+
+            default:
+                // ERROR
+                switch_err = 1;
+                break;
+        }
+
+        free(argument);
+
+        // if error occured in switch
+        if (switch_err)
+        {
             break;
         }
-        pthread_mutex_unlock(&mutex);
     }
 
+    pthread_mutex_lock(&mutex);
+    remove_session(c_session.client_id);
     pthread_mutex_unlock(&mutex);
-    free(l_args);
+    close(client_socket);
     return NULL;
+}
+
+// quick handling for errors
+void error(char *msg)
+{
+    fprintf(stderr, "%s\n", msg);
+    exit(1);
+}
+
+// replaces newlines and carriage returns with null terminator
+void strip_nl(char *buffer)
+{
+    buffer[strcspn(buffer, "\n")] = '\0';
+    buffer[strcspn(buffer, "\r")] = '\0';
+}
+
+// gets the index of a client session in the sessions array
+int get_session(char *client_id)
+{
+    for (int i = 0; i < n_sessions; i++)
+    {
+        if (strcmp(sessions[i].client_id, client_id) == 0)
+        {
+            return i;
+        }
+    }
+    return -1;
+}
+
+// removes a client session from the sessions array
+void remove_session(char *client_id)
+{
+    // get the session index
+    int session = get_session(client_id);
+
+    // for each data item in client data
+    for (int i = 0; i < sessions[session].allowance; i++)
+    {
+        //remove data
+        remove_data(client_id, sessions[session].data[i].key, 0);
+    }
+    // free memory
+    free(sessions[session].client_id);
+    free(sessions[session].data);
+    sessions[session].allowance = 0;
+
+    // if not the last session in array
+    if (session < n_sessions - 1)
+    {
+        // for the remaining sessions
+        for (int i = 0; i < n_sessions; i++)
+        {
+            // if last session in array
+            if (i == n_sessions - 1)
+            {
+                // free duplicate
+                for (int j = 0; j < sessions[i].allowance; j++)
+                {
+                    remove_data(sessions[i].client_id, sessions[i].data[j].key, 0);
+                }
+                sessions[i].client_id = NULL;
+                sessions[i].data = NULL;
+                sessions[i].allowance = 0;
+                break;
+            }
+            // shift sessions to left
+            sessions[i] = sessions[i + 1];
+        }
+    }
+    // decrement n_sessions
+    n_sessions--;
+    return;
+}
+
+// removes client data based on a given key
+int remove_data(char *client_id, char *key, int shift_items)
+{
+    // get the session index
+    int session = get_session(client_id);
+
+    // for each data item in stored data
+    for (int i = 0; i < sessions[session].allowance; i++)
+    {
+        // if the key matches the argument
+        if (strcmp(sessions[session].data[i].key, key) == 0)
+        {
+            // free the memory
+            free(sessions[session].data[i].key);
+            free(sessions[session].data[i].value);
+
+            // if shifting items and not last item
+            if (shift_items && i < sessions[session].allowance)
+            {
+                // for remaining items
+                for (int j = i; j < sessions[session].allowance; j++)
+                {
+                    // if last item
+                    if (j == sessions[session].allowance - 1)
+                    {
+                        // free duplicate
+                        sessions[session].data[j].key = NULL;
+                        sessions[session].data[j].value = NULL;
+                        break;
+                    }
+                    // shift items to left
+                    sessions[session].data[j] = sessions[session].data[j + 1];
+                }
+            }
+            // decrement allowance
+            sessions[session].allowance--;
+            return 0;
+        }
+    }
+    return -1;
 }
