@@ -211,7 +211,7 @@ void *client_handler(void *cli_socket)
         strip_nl(buffer);
 
         // get the command
-        cmd_len = strcspn(buffer, " ");
+        cmd_len = strcspn(buffer, " ") + 1;
         if ((command = malloc((cmd_len + 1) * sizeof(char))) == NULL)
         {
             break;
@@ -239,9 +239,9 @@ void *client_handler(void *cli_socket)
         }
 
         // handle the command
-        strcmp(command, "PUT") == 0 ? (arg = 1) :
-        strcmp(command, "GET") == 0 ? (arg = 2) :
-        strcmp(command, "DELETE") == 0? (arg = 3) :
+        strcmp(command, "PUT ") == 0 ? (arg = 1) :
+        strcmp(command, "GET ") == 0 ? (arg = 2) :
+        strcmp(command, "DELETE ") == 0? (arg = 3) :
         (arg = -1);
 
         free(command);
@@ -339,11 +339,11 @@ void *client_handler(void *cli_socket)
                 // GET command
                 pthread_mutex_lock(&mutex);
                 session = get_session(c_session.client_id);
+                exists = 0;
 
                 // for all data items
                 for (int i = 0; i < sessions[session].allowance; i++)
                 {
-                    exists = 0;
                     // if key in data array
                     if (strcmp(sessions[session].data[i].key, argument) == 0)
                     {
