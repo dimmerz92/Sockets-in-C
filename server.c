@@ -2,11 +2,11 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <pthread.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
+#include <openssl/evp.h>
+#include <openssl/bio.h>
+#include <openssl/ssl.h>
+
 
 /*-------------------------
 | CONSTS
@@ -18,8 +18,7 @@
 | PRE-DECLARATIONS
 | - main() dependencies
 |-------------------------*/
-void *client_handler(void *cli_socket);
-void error(char *msg);
+void *client_handler(void *ssl);
 void strip_nl(char *buffer);
 int ascii_buffer(char *buffer);
 int get_session(char *client_id);
@@ -62,68 +61,141 @@ int main(int argc, char *argv[])
     // check arg length
     if (argc != 2)
     {
-        error("ERROR insufficient arguments");
+        fprintf(stderr, "Error insufficient arguments\n");
+        return -1;
     }
 
-    // initialise socket variables
-    struct sockaddr_in serv_addr, cli_addr;
-    socklen_t serv_len = sizeof(serv_addr);
-    socklen_t cli_len = sizeof(cli_addr);
-    int sockfd, new_sockfd, *cli_sock;
-    pthread_t thread;
-
-    // create socket
-    if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+    // Generate EC keys
+    EVP_PKEY_CTX *key_ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_EC, NULL);
+    if (key_ctx == NULL)
     {
-        error("ERROR creating socket");
+        fprintf(stderr, "Error generating key context\n");
+        exit(1);
     }
 
-    // add socket details
-    memset(&serv_addr, 0, serv_len);
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(atoi(argv[1]));
-    serv_addr.sin_addr.s_addr = INADDR_ANY;
-
-    // bind socket
-    if (bind(sockfd, (struct sockaddr *)&serv_addr, serv_len) < 0)
+    if (EVP_PKEY_keygen_init(key_ctx) <= 0)
     {
-        error("ERROR binding socket");
+        fprintf(stderr, "Error generating keygen\n");
+        exit(1);
     }
 
-    // listen to socket
-    if (listen(sockfd, MAX_SESSIONS) < 0)
+    if (EVP_PKEY_CTX_set_ec_paramgen_curve_nid(key_ctx, NID_X9_62_prime256v1) <= 0)
     {
-        error("ERROR listening to socket");
+        fprintf(stderr, "Error generating elliptic curve\n");
+        exit(1);
     }
 
-    // keep accepting new connections
+    EVP_PKEY *keys;
+    if (EVP_PKEY_keygen(key_ctx, &keys) <= 0)
+    {
+        fprintf(stderr, "Error generating keys\n");
+        exit(1);
+    }
+
+    EVP_PKEY_CTX_free(key_ctx);
+
+    // Initialise OpenSSL SSL context object
+    SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
+    if (ctx == NULL)
+    {
+        fprintf(stderr, "Error generating SSL context\n");
+        exit(1);
+    }
+
+    // Generate and self-sign certificate
+    X509 *cert = X509_new();
+    if (cert == NULL)
+    {
+        fprintf(stderr, "Error generating certificate\n");
+        exit(1);
+    }
+    X509_set_version(cert, 2);
+    ASN1_INTEGER_set(X509_get_serialNumber(cert), 1);
+    X509_gmtime_adj(X509_get_notBefore(cert), 0);
+    X509_gmtime_adj(X509_get_notAfter(cert), (long) 60 * 60 * 24 * 365); // valid for 1 year (in seconds)
+    X509_set_pubkey(cert, keys);
+    X509_sign(cert, keys, EVP_sha256());
+
+    // Add cert and keys to SSL context
+    if (SSL_CTX_use_certificate(ctx, cert) != 1)
+    {
+        fprintf(stderr, "Error loading certificate\n");
+        exit(1);
+    }
+
+    if (SSL_CTX_use_PrivateKey(ctx, keys) != 1)
+    {
+        fprintf(stderr, "Error loading keys\n");
+        exit(1);
+    }
+
+    if (SSL_CTX_check_private_key(ctx) != 1)
+    {
+        fprintf(stderr, "Error checking keys");
+        exit(1);
+    }
+
+    // Initialise OpenSSL listen socket
+    BIO *bio = BIO_new_accept(argv[1]);
+    if (bio == NULL)
+    {
+        fprintf(stderr, "Error initalising BIO socket\n");
+        return -1;
+    }
+
+    // Bind the socket
+    if (BIO_do_accept(bio) <= 0)
+        {
+            fprintf(stderr, "Error binding socket\n");
+            return -1;
+        }
+
+    // Keep accepting new connections
     while (1)
     {
-        // accept incoming connection
-        memset(&cli_addr, 0, cli_len);
-        if ((new_sockfd = accept(sockfd, (struct sockaddr *)&cli_addr, &cli_len)) < 0)
+        // Accept incoming connections
+        if (BIO_do_accept(bio) <= 0)
         {
+            fprintf(stderr, "Error accepting connection\n");
             continue;
         }
 
-        // prepare client socket to pass in to new thread
-        if ((cli_sock = malloc(sizeof(int))) == NULL)
+        // Get the client BIO
+        BIO *client_bio = BIO_pop(bio);
+        if (client_bio == NULL)
         {
-            close(new_sockfd);
+            fprintf(stderr, "Error getting client BIO\n");
             continue;
         }
-        *cli_sock = new_sockfd;
 
-        // start a new thread
-        if (pthread_create(&thread, NULL, client_handler, cli_sock) != 0)
+        // Initialise SSL
+        SSL *ssl = SSL_new(ctx);
+        if (ssl == NULL)
         {
-            close(new_sockfd);
-            free(cli_sock);
+            fprintf(stderr, "Error initialising ssl\n");
+            BIO_free(client_bio);
             continue;
         }
-        pthread_detach(thread);
+
+        // Wrap BIO in SSL
+        SSL_set_bio(ssl, client_bio, client_bio);
+        if (SSL_accept(ssl) <= 0)
+        {
+            fprintf(stderr, "Error applying SSL\n");
+            BIO_free(client_bio);
+            //SSL_free(ssl);
+            continue;
+        }
+
+        pthread_t thread;
+        if (pthread_create(&thread, NULL, client_handler, (void *) ssl) != 0)
+        {
+            fprintf(stderr, "Error producing thread\n");
+            SSL_free(ssl);
+        } else {
+            pthread_detach(thread);
+        }
     }
-    close(sockfd);
     return 0;
 }
 
@@ -132,20 +204,19 @@ int main(int argc, char *argv[])
 |-------------------------*/
 
 // handles client sessions
-void *client_handler(void *cli_socket)
+void *client_handler(void *ssl)
 {
-    // initialise variables
-    int client_socket = *(int *)cli_socket;
-    //free(cli_socket);
-    char buffer[MAX_BUFFER];
-    char *command, *argument;
+    // Initalise variables
+    SSL *client = (SSL *) ssl;
+    char buffer[MAX_BUFFER], *command, *argument;
     int session, cmd_len, arg_len, arg, exists;
 
     // read first message, ensure CONNECT before starting new thread
     memset(buffer, 0, MAX_BUFFER);
-    if (recv(client_socket, buffer, MAX_BUFFER - 1, 0) < 0)
+    if (SSL_read(client, buffer, MAX_BUFFER - 1) <= 0)
     {
-        close(client_socket);
+        fprintf(stderr, "Error reading CONNECT\n");
+        SSL_free(client);
         return NULL;
     }
 
@@ -155,14 +226,14 @@ void *client_handler(void *cli_socket)
     // check message is ASCII only
     if (ascii_buffer(buffer) < 0)
     {
-        close(client_socket);
+        SSL_free(client);
         return NULL;
     }
 
     // check argument is CONNECT with space
     if (n_sessions == 5 || strncmp(buffer, "CONNECT ", 8) != 0)
     {
-        close(client_socket);
+        SSL_free(client);
         return NULL;
     }
 
@@ -171,8 +242,8 @@ void *client_handler(void *cli_socket)
     if (get_session(&buffer[strlen("CONNECT ")]) >= 0)
     {
         pthread_mutex_unlock(&mutex);
-        send(client_socket, "CONNECT: ERROR", strlen("CONNECT: ERROR"), 0);
-        close(client_socket);
+        SSL_write(client, "CONNECT: ERROR", strlen("CONNECT: ERROR"));
+        SSL_free(client);
         return NULL;
     }
     pthread_mutex_unlock(&mutex);
@@ -183,8 +254,8 @@ void *client_handler(void *cli_socket)
     c_session.data = malloc(1);
     if (c_session.client_id == NULL || c_session.data == NULL)
     {
-        send(client_socket, "CONNECT: ERROR", strlen("CONNECT: ERROR"), 0);
-        close(client_socket);
+        SSL_write(client, "CONNECT: ERROR", strlen("CONNECT: ERROR"));
+        SSL_free(client);
         free(c_session.client_id);
         free(c_session.data);
         return NULL;
@@ -197,12 +268,12 @@ void *client_handler(void *cli_socket)
     pthread_mutex_unlock(&mutex);
 
     // acknowledge connect
-    if(send(client_socket, "CONNECT: OK", strlen("CONNECT: OK"), 0) < 0)
+    if(SSL_write(client, "CONNECT: OK", strlen("CONNECT: OK")) <= 0)
     {
         pthread_mutex_lock(&mutex);
         remove_session(c_session.client_id);
         pthread_mutex_unlock(&mutex);
-        close(client_socket);
+        SSL_free(client);
         return NULL;
     }
 
@@ -211,7 +282,7 @@ void *client_handler(void *cli_socket)
     {
         // receive messages
         memset(buffer, 0, MAX_BUFFER);
-        if (recv(client_socket, buffer, MAX_BUFFER - 1, 0) < 0)
+        if (SSL_read(client, buffer, MAX_BUFFER - 1) <= 0)
         {
             break;
         }
@@ -237,7 +308,7 @@ void *client_handler(void *cli_socket)
         // disconnect if commanded, otherwise get argument
         if (strcmp(command, "DISCONNECT") == 0)
         {
-            send(client_socket, "DISCONNECT: OK", strlen("DISCONNECT: OK"), 0);
+            SSL_write(client, "DISCONNECT: OK", strlen("DISCONNECT: OK"));
             free(command);
             break;
         }
@@ -269,7 +340,7 @@ void *client_handler(void *cli_socket)
             case 1:
                 // PUT command: add data
                 // acknowledge PUT command
-                if (send(client_socket, "ACK", 3, 0) < 0)
+                if (SSL_write(client, "ACK", 3) <= 0)
                 {
                     switch_err = 1;
                 }
@@ -278,7 +349,7 @@ void *client_handler(void *cli_socket)
                 {
                     // receive value
                     memset(buffer, 0, MAX_BUFFER);
-                    if (recv(client_socket, buffer, MAX_BUFFER - 1, 0) < 0)
+                    if (SSL_read(client, buffer, MAX_BUFFER - 1) <= 0)
                     {
                         switch_err = 1;
                         goto put_error;
@@ -337,7 +408,7 @@ void *client_handler(void *cli_socket)
 
                 if (!switch_err)
                 {
-                    if (send(client_socket, "PUT: OK", strlen("PUT: OK"), 0) < 0)
+                    if (SSL_write(client, "PUT: OK", strlen("PUT: OK")) <= 0)
                     {
                         switch_err = 1;
                     }
@@ -347,7 +418,7 @@ void *client_handler(void *cli_socket)
                 if (switch_err)
                 {
                     switch_err = 0;
-                    if (send(client_socket, "PUT: ERROR", strlen("PUT: ERROR"), 0) < 0)
+                    if (SSL_write(client, "PUT: ERROR", strlen("PUT: ERROR")) <= 0)
                     {
                         switch_err = 1;
                     }
@@ -369,7 +440,7 @@ void *client_handler(void *cli_socket)
                     if (strcmp(sessions[session].data[i].key, argument) == 0)
                     {
                         exists = 1;
-                        if (send(client_socket, sessions[session].data[i].value, strlen(sessions[session].data[i].value), 0) < 0)
+                        if (SSL_write(client, sessions[session].data[i].value, strlen(sessions[session].data[i].value)) <= 0)
                         {
                             switch_err = 1;
                         }
@@ -380,7 +451,7 @@ void *client_handler(void *cli_socket)
                 if (switch_err || !exists)
                 {
                     switch_err = 0;
-                    if (send(client_socket, "GET: ERROR", strlen("GET: ERROR"), 0) < 0)
+                    if (SSL_write(client, "GET: ERROR", strlen("GET: ERROR")) <= 0)
                     {
                         switch_err = 1;
                     }
@@ -401,14 +472,14 @@ void *client_handler(void *cli_socket)
                 if (switch_err)
                 {
                     switch_err = 0;
-                    if (send(client_socket, "DELETE: ERROR", strlen("DELETE: ERROR"), 0) < 0)
+                    if (SSL_write(client, "DELETE: ERROR", strlen("DELETE: ERROR")) <= 0)
                     {
                         switch_err = 1;
                     }
                 }
                 else
                 {
-                    if (send(client_socket, "DELETE: OK", strlen("DELETE: OK"), 0) < 0)
+                    if (SSL_write(client, "DELETE: OK", strlen("DELETE: OK")) <= 0)
                     {
                         switch_err = 1;
                     }
@@ -435,15 +506,8 @@ void *client_handler(void *cli_socket)
     pthread_mutex_lock(&mutex);
     remove_session(c_session.client_id);
     pthread_mutex_unlock(&mutex);
-    close(client_socket);
+    SSL_free(client);
     return NULL;
-}
-
-// quick handling for errors
-void error(char *msg)
-{
-    fprintf(stderr, "%s\n", msg);
-    exit(1);
 }
 
 // replaces newlines and carriage returns with null terminator
