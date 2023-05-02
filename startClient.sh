@@ -3,6 +3,6 @@
 host=$1
 port=$2
 
-gcc -o client client.c
+gcc -o client client.c -lssl -lcrypto
 
 ./client $host $port
