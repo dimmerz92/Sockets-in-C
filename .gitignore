@@ -2,3 +2,5 @@ count_words
 arg_lengths
 server
 client
+.vscode
+.gitignore
