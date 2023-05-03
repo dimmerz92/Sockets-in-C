@@ -1,4 +1,4 @@
-# Assessment 2 - Client-Server Programs Assessment Submission README
+# Assessment 4 - Client-Server with TLS Programs Assessment Submission README
 
 ## Author
 **Name:**       Andrew Weymes\
@@ -9,10 +9,10 @@
 ## Dependencies
 - Bash shell
 - GCC compiler
-- C headers: stdio.h, stdlib.h, netdb.h, unistd.h, pthread.h, sys/types.h, sys/socket.h, and netinet/in.h
+- C headers: stdio.h, ctype.h, stdlib.h, string.h, pthread.h, openssl/evp.h, openssl/bio.h, openssl/ssl.h
 
 ## Introduction
-This is a submission for COSC540 - Computer Networks and Information Security at The University of New England (UNE). The submission contains two programs, the server and client, and two shell scripts to compile and run both programs. The server allows concurrent users to CONNECT with a client ID and subsequently add, delete, or manipulate data with the PUT, GET, and DELETE commands.
+This is a submission for COSC540 - Computer Networks and Information Security at The University of New England (UNE). The submission contains two programs, the server and client, and two shell scripts to compile and run both programs. The server allows concurrent users to CONNECT with a client ID and subsequently add, delete, or manipulate data with the PUT, GET, and DELETE commands. This is done using elliptic curve cryptography from the OpenSSL library.
 
 ## Instructions
 ### Running the server
@@ -25,7 +25,7 @@ Where 'port' is the port number you want the server to run on.
 ### Running the client
 To run the client, use the following command:
 ```
-bash startClient.sh address port
+bash startClient.sh 'address' 'port'
 ```
 Where 'address' is the server address (localhost for this assignment) and 'port' is the port number of the server.
 
@@ -43,6 +43,5 @@ Where 'address' is the server address (localhost for this assignment) and 'port'
 ## Further information & constraints
 - Arguments in parenthesis are expected to be unique strings chosen by the client.
 - On unexpected errors or incorrect client arguments, the server will force disconnect and delete all user data and remove the session.
-- The server can handle concurrent clients with a maximum number of sessions up to 5 clients.
 - The maximum message a client can send is 256 characters including a null terminator.
     - This is inclusive of both command and argument.
